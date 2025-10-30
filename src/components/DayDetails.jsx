@@ -1,117 +1,183 @@
-import SunCalc from 'suncalc'
-import { useMemo } from 'react'
-import { Sunrise, Sunset, Moon, Calendar as Cal, MapPin } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { Sun, Sunrise, Sunset, Moon } from 'lucide-react'
 
+// Approximate Malayalam month lengths (days) and order starting mid-Aug
+const MAL_MONTHS = [
+  'Chingam',
+  'Kanni',
+  'Thulam',
+  'Vrischikam',
+  'Dhanu',
+  'Makaram',
+  'Kumbham',
+  'Meenam',
+  'Medam',
+  'Edavam',
+  'Mithunam',
+  'Karkidakam',
+]
+const MAL_MONTH_LENGTHS = [31, 30, 31, 30, 30, 29, 30, 31, 31, 31, 30, 30]
+
+const NAKSHATRAS = [
+  'Ashwati', 'Bharani', 'Karthika', 'Rohini', 'Makayiram', 'Thiruvathira', 'Punartham', 'Pooyam', 'Ayilyam',
+  'Makam', 'Pooram', 'Uthram', 'Atham', 'Chithra', 'Chothi', 'Visakham', 'Anizham', 'Thrikketta', 'Moolam',
+  'Pooradam', 'Uthradam', 'Thiruvonam', 'Avittam', 'Chathayam', 'Pooruruttathi', 'Uthrattathi', 'Revathi'
+]
+
+function pad(n) { return String(n).padStart(2, '0') }
+
+// NOAA-like simple sunrise/sunset calculation
+function toJulian(date) {
+  return date / 86400000 + 2440587.5
+}
+function solarMeanAnomaly(d) {
+  return (357.5291 + 0.98560028 * d) * (Math.PI / 180)
+}
+function eclipticLongitude(M) {
+  const C = (1.9148 * Math.sin(M) + 0.02 * Math.sin(2 * M) + 0.0003 * Math.sin(3 * M)) * (Math.PI / 180)
+  const P = 102.9372 * (Math.PI / 180)
+  return M + C + P + Math.PI
+}
+function declination(L) {
+  const e = 23.4397 * (Math.PI / 180)
+  return Math.asin(Math.sin(e) * Math.sin(L))
+}
+function hourAngle(lat, dec) {
+  const h = Math.acos((Math.sin(-0.83 * Math.PI / 180) - Math.sin(lat) * Math.sin(dec)) / (Math.cos(lat) * Math.cos(dec)))
+  return h
+}
+function getSetJ(date, lat, lng, rising) {
+  const lw = -lng * (Math.PI / 180)
+  const phi = lat * (Math.PI / 180)
+  const d = toJulian(date) - 2451545.0
+  const M = solarMeanAnomaly(d)
+  const L = eclipticLongitude(M)
+  const dec = declination(L)
+  const H = hourAngle(phi, dec) * (rising ? -1 : 1)
+  const Jtransit = 2451545.0 + d + 0.0053 * Math.sin(M) - 0.0069 * Math.sin(2 * L)
+  const JriseSet = Jtransit + (H + lw) / (2 * Math.PI)
+  return (JriseSet - 2440587.5) * 86400000
+}
 function formatTime(date) {
-  if (!date) return '—'
-  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  const hh = date.getHours()
+  const mm = date.getMinutes()
+  const ampm = hh >= 12 ? 'PM' : 'AM'
+  const h12 = hh % 12 === 0 ? 12 : hh % 12
+  return `${h12}:${pad(mm)} ${ampm}`
 }
 
-function moonPhaseName(phase) {
-  // phase: 0 new, 0.25 first quarter, 0.5 full, 0.75 last quarter
-  const p = phase
-  if (p < 0.03 || p > 0.97) return 'New Moon'
-  if (p < 0.22) return 'Waxing Crescent'
-  if (p < 0.28) return 'First Quarter'
-  if (p < 0.47) return 'Waxing Gibbous'
-  if (p < 0.53) return 'Full Moon'
-  if (p < 0.72) return 'Waning Gibbous'
-  if (p < 0.78) return 'Last Quarter'
-  return 'Waning Crescent'
+// Moon phase simple approximation
+function moonPhase(date) {
+  const synodic = 29.53058867
+  const knownNewMoon = new Date(Date.UTC(2000, 0, 6, 18, 14))
+  const days = (date - knownNewMoon) / 86400000
+  const age = ((days % synodic) + synodic) % synodic
+  const phase = age / synodic
+
+  const names = [
+    'New Moon',
+    'Waxing Crescent',
+    'First Quarter',
+    'Waxing Gibbous',
+    'Full Moon',
+    'Waning Gibbous',
+    'Last Quarter',
+    'Waning Crescent',
+  ]
+  const index = Math.floor((phase * 8) + 0.5) % 8
+  return { age: age.toFixed(1), name: names[index] }
+}
+
+// Approx Malayalam date approximation
+function malayalamDate(gd) {
+  // Chingam roughly starts on Aug 17
+  const year = gd.getMonth() >= 7 ? gd.getFullYear() : gd.getFullYear() - 1
+  const start = new Date(year, 7, 17)
+  const diffDays = Math.floor((new Date(gd.getFullYear(), gd.getMonth(), gd.getDate()) - start) / 86400000)
+  let d = diffDays
+  let monthIndex = 0
+  while (d >= MAL_MONTH_LENGTHS[monthIndex]) {
+    d -= MAL_MONTH_LENGTHS[monthIndex]
+    monthIndex = (monthIndex + 1) % 12
+  }
+  const day = d + 1
+  const kollavarsham = year - 825 // Kollavarsham approx offset
+  return { month: MAL_MONTHS[monthIndex], day, year: kollavarsham }
+}
+
+// Approx Nakshatra using sidereal month length
+function nakshatra(date) {
+  const sidereal = 27.321661
+  const epoch = new Date(Date.UTC(2000, 0, 1, 0, 0))
+  const days = (date - epoch) / 86400000
+  const idx = Math.floor(((days % sidereal) + sidereal) % sidereal / (sidereal / 27))
+  return NAKSHATRAS[idx]
 }
 
 function DayDetails({ date, location }) {
-  const { lat, lon } = location || { lat: 10.1632, lon: 76.6413 }
+  const [sunTimes, setSunTimes] = useState({ sunrise: '-', sunset: '-' })
 
-  const data = useMemo(() => {
-    try {
-      const times = SunCalc.getTimes(date, lat, lon)
-      const moonIllum = SunCalc.getMoonIllumination(date)
-      const moonTimes = SunCalc.getMoonTimes(date, lat, lon)
+  const mal = useMemo(() => malayalamDate(date), [date])
+  const phase = useMemo(() => moonPhase(date), [date])
+  const star = useMemo(() => nakshatra(date), [date])
 
-      return {
-        sunrise: times.sunrise,
-        sunset: times.sunset,
-        moonrise: moonTimes.rise || null,
-        moonset: moonTimes.set || null,
-        moonPhase: moonPhaseName(moonIllum.phase),
-        illumination: Math.round(moonIllum.fraction * 100),
-      }
-    } catch (e) {
-      return null
-    }
-  }, [date, lat, lon])
-
-  // Malayalam calendar placeholders are marked clearly to avoid misinformation.
-  const malayalamInfo = useMemo(() => {
-    return {
-      available: false,
-      note:
-        'Malayalam calendar date and nakshatra require precise Panchang data. Backend will provide this in a later update.',
-    }
-  }, [])
+  useEffect(() => {
+    if (!location) return
+    // compute sunrise/sunset in local timezone of device
+    const d = new Date(date.getFullYear(), date.getMonth(), date.getDate())
+    const sunriseMs = getSetJ(d, location.lat, location.lon, true)
+    const sunsetMs = getSetJ(d, location.lat, location.lon, false)
+    const rise = new Date(sunriseMs)
+    const set = new Date(sunsetMs)
+    setSunTimes({ sunrise: formatTime(rise), sunset: formatTime(set) })
+  }, [date, location])
 
   return (
-    <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <div className="text-sm text-gray-500">Selected date</div>
-          <div className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-            <Cal size={18} /> {date.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+    <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
+      <div className="flex items-center gap-2 mb-3">
+        <Sun className="text-amber-500" size={18} />
+        <h3 className="font-semibold text-gray-800">Day Details</h3>
+      </div>
+
+      <div className="space-y-3 text-sm">
+        <div className="flex items-center justify-between">
+          <span className="text-gray-500">English Date</span>
+          <span className="font-medium">{date.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</span>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-gray-500">Malayalam Date</span>
+          <span className="font-medium">{mal.month} {mal.day}, {mal.year}</span>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-gray-500">Star (Nakshatra)</span>
+          <span className="font-medium">{star}</span>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="bg-gray-50 rounded-lg p-3 flex items-center justify-between">
+            <div className="flex items-center gap-2 text-gray-600">
+              <Sunrise size={16} />
+              <span>Sunrise</span>
+            </div>
+            <span className="font-semibold text-gray-800">{sunTimes.sunrise}</span>
+          </div>
+          <div className="bg-gray-50 rounded-lg p-3 flex items-center justify-between">
+            <div className="flex items-center gap-2 text-gray-600">
+              <Sunset size={16} />
+              <span>Sunset</span>
+            </div>
+            <span className="font-semibold text-gray-800">{sunTimes.sunset}</span>
           </div>
         </div>
-        <div className="text-right">
-          <div className="text-sm text-gray-500">Location</div>
-          <div className="text-sm font-medium text-gray-900 flex items-center gap-1 justify-end">
-            <MapPin size={16} /> {lat.toFixed(3)}, {lon.toFixed(3)}
+        <div className="bg-indigo-50 rounded-lg p-3 flex items-center justify-between">
+          <div className="flex items-center gap-2 text-indigo-700">
+            <Moon size={16} />
+            <span>Moon</span>
           </div>
+          <span className="font-semibold text-indigo-900">{phase.name} · age {phase.age}d</span>
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
-        <div className="p-3 rounded-lg bg-blue-50 border border-blue-100">
-          <div className="flex items-center gap-2 text-blue-700 font-medium">
-            <Sunrise size={18} /> Sunrise
-          </div>
-          <div className="text-xl font-semibold text-blue-900 mt-1">{formatTime(data?.sunrise)}</div>
-        </div>
-        <div className="p-3 rounded-lg bg-orange-50 border border-orange-100">
-          <div className="flex items-center gap-2 text-orange-700 font-medium">
-            <Sunset size={18} /> Sunset
-          </div>
-          <div className="text-xl font-semibold text-orange-900 mt-1">{formatTime(data?.sunset)}</div>
-        </div>
-      </div>
-
-      <div className="p-3 rounded-lg bg-purple-50 border border-purple-100">
-        <div className="flex items-center gap-2 text-purple-700 font-medium">
-          <Moon size={18} /> Moon phase
-        </div>
-        <div className="mt-1 text-purple-900">
-          <div className="text-lg font-semibold">{data?.moonPhase || '—'}</div>
-          {typeof data?.illumination === 'number' && (
-            <div className="text-sm">Illumination: {data.illumination}%</div>
-          )}
-          <div className="text-xs text-purple-700 mt-1">
-            {data?.moonrise ? `Moonrise ${formatTime(data.moonrise)}` : 'Moonrise —'} · {data?.moonset ? `Moonset ${formatTime(data.moonset)}` : 'Moonset —'}
-          </div>
-        </div>
-      </div>
-
-      <div className="p-3 rounded-lg bg-gray-50 border border-gray-200">
-        <div className="text-gray-700 font-medium">Malayalam calendar</div>
-        <div className="mt-1 text-sm text-gray-700">
-          <div className="flex items-center justify-between py-1">
-            <span className="text-gray-500">Date</span>
-            <span className="font-medium">Not available offline</span>
-          </div>
-          <div className="flex items-center justify-between py-1">
-            <span className="text-gray-500">Star sign (Nakshatra)</span>
-            <span className="font-medium">Not available offline</span>
-          </div>
-          <p className="text-xs text-gray-500 mt-2">{malayalamInfo.note}</p>
-        </div>
-      </div>
+      <p className="mt-3 text-xs text-gray-400">Values are approximate for quick reference.</p>
     </div>
   )
 }

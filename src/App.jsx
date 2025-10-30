@@ -1,54 +1,41 @@
 import { useMemo, useState } from 'react'
 import Header from './components/Header'
-import CalendarGrid from './components/CalendarGrid'
+import CalendarMonth from './components/CalendarMonth'
 import DayDetails from './components/DayDetails'
 import LocationPicker from './components/LocationPicker'
 
 function App() {
-  const [monthDate, setMonthDate] = useState(() => {
-    const now = new Date()
-    return new Date(now.getFullYear(), now.getMonth(), 1)
-  })
-  const [selectedDate, setSelectedDate] = useState(() => new Date())
-  const [location, setLocation] = useState({ lat: 10.1632, lon: 76.6413 }) // Kochi default
+  const [viewDate, setViewDate] = useState(() => new Date())
+  const [selected, setSelected] = useState(() => new Date())
+  const [location, setLocation] = useState(null)
 
-  const handleMonthChange = (delta) => {
-    setMonthDate((d) => new Date(d.getFullYear(), d.getMonth() + delta, 1))
-  }
-
-  // Keep selected date in sync when months change if it falls outside
-  useMemo(() => {
-    if (
-      selectedDate.getFullYear() !== monthDate.getFullYear() ||
-      selectedDate.getMonth() !== monthDate.getMonth()
-    ) {
-      // keep it; user can reselect. No automatic change.
-    }
-  }, [monthDate, selectedDate])
+  const title = useMemo(
+    () => selected.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' }),
+    [selected]
+  )
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-sky-50 via-white to-indigo-50">
-      <Header />
+    <div className="min-h-screen bg-gradient-to-b from-blue-50 to-white">
+      <div className="max-w-md mx-auto">
+        <Header />
 
-      <main className="mx-auto max-w-6xl p-4 md:p-6 grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-6">
-        <div className="lg:col-span-2">
-          <CalendarGrid
-            monthDate={monthDate}
-            onMonthChange={handleMonthChange}
-            selectedDate={selectedDate}
-            onSelectDate={setSelectedDate}
+        <main className="px-4 pb-20 space-y-4">
+          <div className="sticky top-0 z-10 -mx-4 px-4 pb-2 pt-1 bg-gradient-to-b from-blue-50 to-transparent">
+            <h2 className="text-lg font-semibold text-gray-800">{title}</h2>
+          </div>
+
+          <CalendarMonth
+            viewDate={viewDate}
+            selectedDate={selected}
+            onSelect={(d) => setSelected(d)}
+            onNavigate={(d) => setViewDate(d)}
           />
-        </div>
 
-        <div className="space-y-4">
+          <DayDetails date={selected} location={location} />
+
           <LocationPicker value={location} onChange={setLocation} />
-          <DayDetails date={selectedDate} location={location} />
-        </div>
-      </main>
-
-      <footer className="p-6 text-center text-xs text-gray-500">
-        Built for a smooth mobile experience. Add to Home Screen for an app-like feel.
-      </footer>
+        </main>
+      </div>
     </div>
   )
 }
